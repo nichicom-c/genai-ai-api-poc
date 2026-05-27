@@ -4,7 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from . import gemini_helpers, prompts
+from . import article_resolver, gemini_helpers, prompts, reference_budget
 from .gemini_usage_tracker import UsageTracker
 from .report_utils import (
     _format_reference,
@@ -30,65 +30,73 @@ def _parse_ai_selection(selection_str: str, max_index: int) -> list[int]:
     """AI応答から選択されたインデックスを解析する"""
     selected_indices = []
     try:
-        lines = selection_str.strip().split("\n")
-        for line in lines:
-            line = line.strip()
-            if line and line[0].isdigit():
-                try:
-                    idx = int(line.split(".")[0])
-                    if 1 <= idx <= max_index:
-                        selected_indices.append(idx)
-                except (ValueError, IndexError):
-                    continue
+        raw_numbers = re.findall(r"\d+", selection_str)
+        for num_str in raw_numbers:
+            idx = int(num_str)
+            if 1 <= idx <= max_index:
+                selected_indices.append(idx)
     except Exception as e:
         logger.error(f"AI選択結果の解析エラー: {e}")
 
-    # フォールバック処理の改善
     if not selected_indices:
         logger.warning("AI selection parsing failed. Using default selection strategy.")
-        # より知的なフォールバック: 最大3つまで、均等に分散
-        if max_index <= 3:
-            return list(range(1, max_index + 1))
-        else:
-            return [1, max_index // 2, max_index]  # 最初、中間、最後
+        return list(range(1, min(max_index + 1, 6)))
 
-    # 重複排除と上限制御
-    selected_indices = list(set(selected_indices))[:20]  # 最大20まで
-    return selected_indices
+    seen: set[int] = set()
+    unique = []
+    for idx in selected_indices:
+        if idx not in seen:
+            seen.add(idx)
+            unique.append(idx)
+    return unique[:50]
 
 
 def _filter_references_by_citations(report_text: str, all_references: list) -> list:
     """レポート内で実際に引用された参照のみを抽出する（元の番号を保持）"""
     raw_nums = re.findall(r"\[(\d+(?:,\s*\d+)*)\]", report_text)
     cited_indices = sorted({int(n.strip()) for group in raw_nums for n in group.split(",")})
-    filtered_refs = []
-    for i in cited_indices:
-        if 1 <= i <= len(all_references):
-            # 元のインデックスを保持するため、タプルで格納
-            filtered_refs.append((i, all_references[i - 1]))  # (original_index, reference)
+    filtered_refs = [
+        (i, all_references[i - 1])  # (original_index, reference)
+        for i in cited_indices
+        if 1 <= i <= len(all_references)
+    ]
     return filtered_refs
 
 
-def _estimate_law_names(query, genai_client, app_config, usage_tracker) -> tuple[list[str], list]:
-    """法令名を推定して (estimated_law_names, web_hits) を返す"""
+def _estimate_law_names(
+    query, genai_client, app_config, usage_tracker
+) -> tuple[list[str], list, list[str]]:
+    """法令名を推定して (estimated_law_names, web_hits, mentioned_articles) を返す"""
     # 2. 法令名推定（Web grounding + 3段階フォールバック）
     logger.info("Estimating law names with web grounding and fallback parsing...")
     estimated_law_names = []
+    mentioned_articles: list[str] = []
+
+    # クエリにURLが含まれる場合は url_context も有効にしてページ内容を読ませる
+    has_url = _URL_IN_QUERY_PATTERN.search(query)
+    grounding_tools = "web_search,url_context" if has_url else "web_search"
+    if has_url:
+        logger.info("URL detected in query. Enabling url_context for law name estimation.")
 
     try:
         # Web grounding でJSON出力を指示
         logger.info("Web grounding with JSON instruction...")
         today_str = date.today().isoformat()
+        url_context_instruction = (
+            "クエリにURLが含まれる場合はそのURLの内容を必ず読み取り、内容に基づいて法令名を特定すること。"
+            if has_url
+            else ""
+        )
         grounding_request = RequestBody(
-            input_text=f"以下のクエリに関連する日本の法令名を調査して、JSON形式で回答してください。\n\nクエリ: {query}",
-            grounding="web_search",
-            system_instruction=f'本日の日付は {today_str} です。クエリに関連する日本の法令を調査し、関連する法令名を以下のJSON形式で回答してください。調査の際はe-Govや各省庁の公式サイト（.go.jpドメイン）を優先して参照してください。必ず有効なJSONで回答してください：{{"law_names": ["法令名1", "法令名2", "法令名3"]}}。【重要1】廃止・失効した法令は絶対に含めないこと。本日時点（{today_str}）で既に廃止・統合されている法令は除外し、現行の後継法令名のみを返すこと（例：「行政機関個人情報保護法」は2022年に廃止され「個人情報の保護に関する法律」に統合済みのため、後者を返す）。廃止・改正の有無が不明な場合はe-Govの最新情報を参照して確認すること。【重要2】クエリで言及された法令名が通称・略称・俗称の場合、対応する正式名称が確実に特定できる場合のみ採用すること。正式名称が不明確または実在が確認できない場合はその法令名を含めないこと（存在しない法令を推測で別の法令に読み替えてはならない）。',
+            input_text=f"以下のクエリに関連する日本の法令名を調査して、JSON形式で回答してください。説明文は不要です。JSONのみ出力してください。\n\nクエリ: {query}",
+            grounding=grounding_tools,
+            system_instruction=f'本日の日付は {today_str} です。{url_context_instruction}クエリに関連する日本の法令を調査し、関連する法令名とクエリが言及している条文番号を以下のJSON形式で回答してください。調査の際はe-Govや各省庁の公式サイト（.go.jpドメイン）を優先して参照してください。必ず有効なJSONのみを出力し、説明文やマークダウンは一切含めないでください：{{"law_names": ["法令名1", "法令名2"], "mentioned_articles": ["1044", "1044の2", "附則3"]}}。mentioned_articlesにはクエリが具体的に言及している条文番号を半角数字で列挙すること。「の」で枝番を表記し、附則の条は「附則」を前置すること。条文番号が言及されていない場合は空配列を返すこと。【重要1】廃止・失効した法令は絶対に含めないこと。本日時点（{today_str}）で既に廃止・統合されている法令は除外し、現行の後継法令名のみを返すこと（例：「行政機関個人情報保護法」は2022年に廃止され「個人情報の保護に関する法律」に統合済みのため、後者を返す）。廃止・改正の有無が不明な場合はe-Govの最新情報を参照して確認すること。【重要2】クエリで言及された法令名が通称・略称・俗称の場合、対応する正式名称が確実に特定できる場合のみ採用すること。正式名称が不明確または実在が確認できない場合はその法令名を含めないこと（存在しない法令を推測で別の法令に読み替えてはならない）。',
             temperature=0.0,
             max_output_tokens=2048,
             top_p=1.0,
             top_k=1,
             candidate_count=1,
-            thinking_budget=0,
+            thinking_budget=0 if not has_url else None,
         )
         contents, gen_config = gemini_helpers.prepare_gemini_request(
             request_body=grounding_request, config=app_config, storage_client=None
@@ -104,23 +112,28 @@ def _estimate_law_names(query, genai_client, app_config, usage_tracker) -> tuple
         logger.info(f"Web grounding response length: {len(response_text)} chars")
         logger.info(f"Web grounding response preview: {response_text[:500]}...")
 
-        # Stage 1: 直接JSON解析を試行
+        # Stage 1: 直接JSON解析を試行（```json コードブロックの囲みも除去）
+        stripped_text = re.sub(r"^```(?:json)?\s*\n?|```\s*$", "", response_text.strip())
         try:
-            result = json.loads(response_text)
+            result = json.loads(stripped_text)
             estimated_law_names = result.get("law_names", [])
+            mentioned_articles = result.get("mentioned_articles", [])
             logger.info(f"Stage 1 success - Direct JSON parsing: {estimated_law_names}")
+            logger.info(f"Stage 1 mentioned_articles: {mentioned_articles}")
         except json.JSONDecodeError:
             logger.info("Stage 1 failed - Trying Stage 2: JSON extraction with regex")
 
             # Stage 2: 正規表現でJSON部分を抽出してから解析
-            json_pattern = r'\{[^{}]*"law_names"[^{}]*\[[^\]]*\][^{}]*\}'
+            json_pattern = r'\{[^{}]*"law_names"\s*:\s*\[[^\]]*\][^{}]*\}'
             json_matches = re.findall(json_pattern, response_text, re.DOTALL)
 
             for json_match in json_matches:
                 try:
                     result = json.loads(json_match)
                     estimated_law_names = result.get("law_names", [])
+                    mentioned_articles = result.get("mentioned_articles", [])
                     logger.info(f"Stage 2 success - Extracted JSON parsing: {estimated_law_names}")
+                    logger.info(f"Stage 2 mentioned_articles: {mentioned_articles}")
                     break
                 except json.JSONDecodeError:
                     continue
@@ -147,8 +160,32 @@ def _estimate_law_names(query, genai_client, app_config, usage_tracker) -> tuple
                         logger.info(f"Stage 3 success - Regex extraction: {estimated_law_names}")
                         break
 
+            # Stage 4: マークダウン形式（太字・リスト）から法令名を抽出
+            if not estimated_law_names:
+                logger.info("Stage 3 failed - Trying Stage 4: Markdown law name extraction")
+                md_patterns = [
+                    r"\*\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*\*",
+                    r"\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*",
+                    r"[*\-]\s*(.+?(?:法律|法|規則|省令|政令|条例)[^\n（(]*)",
+                ]
+                for pattern in md_patterns:
+                    matches = re.findall(pattern, response_text)
+                    if matches:
+                        cleaned = []
+                        for m in matches:
+                            name = re.sub(r"\s*[\(（].*?[)）]", "", m.strip())
+                            name = name.strip(" *-・")
+                            if 4 <= len(name) <= 60:
+                                cleaned.append(name)
+                        if cleaned:
+                            estimated_law_names = list(dict.fromkeys(cleaned))[:10]
+                            logger.info(
+                                f"Stage 4 success - Markdown extraction: {estimated_law_names}"
+                            )
+                            break
+
         if not estimated_law_names:
-            logger.warning("All 3 stages failed to extract law names")
+            logger.warning("All stages (1-4) failed to extract law names")
         else:
             logger.info(f"Final extracted law names: {estimated_law_names}")
 
@@ -160,16 +197,16 @@ def _estimate_law_names(query, genai_client, app_config, usage_tracker) -> tuple
             keyword in error_str
             for keyword in ["timeout", "connection", "api", "network", "service", "unavailable"]
         ):
-            return ([], [])
+            return ([], [], [])
         else:
-            return ([], [])
+            return ([], [], [])
 
     # 法令名推定が空の結果を返した場合
     if not estimated_law_names:
         logger.warning("Law name estimation returned empty result")
-        return ([], [])
+        return ([], [], [])
 
-    return (estimated_law_names, web_hits)
+    return (estimated_law_names, web_hits, mentioned_articles)
 
 
 def _search_articles(law_names, bq_retriever) -> list:
@@ -245,30 +282,40 @@ def _select_articles(query, articles, genai_client, app_config, usage_tracker) -
 
 def _to_full_articles(articles) -> list:
     """条文データをFullArticle形式に変換して返す"""
-    # 5. 条文データをFullArticle形式に変換（SQL側で文字数に応じてsummary/contentを判定済み）
     logger.info("Converting articles to FullArticle format...")
     final_articles = []
     for article in articles:
         if hasattr(article, "content") and article.content:
+            law_id_base = article.law_id.split("_")[0]
+            anchor = getattr(article, "anchor", None)
+            url = (
+                f"https://laws.e-gov.go.jp/law/{law_id_base}#{anchor}"
+                if anchor
+                else f"https://laws.e-gov.go.jp/law/{law_id_base}"
+            )
             full_article = FullArticle(
                 law_id=article.law_id,
                 title=article.law_title,
-                content=article.content,  # SQL側で文字数に応じて適切なコンテンツが設定済み
+                content=article.content,
                 unique_anchor=article.unique_anchor,
-                anchor=None,
-                url=f"https://laws.e-gov.go.jp/law/{article.law_id.split('_')[0]}",
+                anchor=anchor,
+                url=url,
             )
             final_articles.append(full_article)
 
     return final_articles
 
 
-def _build_references(final_articles, web_hits) -> tuple[list, str]:
+def _build_references(
+    final_articles, web_hits, mentioned_anchors: set[str] | None = None
+) -> tuple[list, str]:
     """検索結果をマージして参照リストと参考情報テキストを返す"""
     # 5. Web検索結果とBigQuery結果のマージ（条文レベルでの参照対応）
     logger.info("Merging search results...")
-    # 条文ごとに個別の参照として扱う（URL重複排除は行わない）
-    article_search_results = final_articles
+    # トークン予算管理: 条文を段階的に degrade して上限内に収める
+    article_search_results = reference_budget.apply_budget(
+        final_articles, mentioned_anchors or set()
+    )
     unique_web_search_results = [
         result
         for result in web_hits
@@ -286,41 +333,7 @@ def _build_references(final_articles, web_hits) -> tuple[list, str]:
     return (search_results, references_text)
 
 
-_URL_IN_QUERY_PATTERN = re.compile(r"https?://\S+")
-_ARTICLE_NUM_PATTERN = re.compile(r"第(\d+)条")
-
-
-def _build_mentioned_articles_prefix(query: str, articles: list) -> str:
-    """クエリで言及された条文番号に対応する条文を抽出し、参考情報の先頭に埋め込むプレフィックスを生成する (Approach A)"""
-    mentioned_nums = _ARTICLE_NUM_PATTERN.findall(query)
-    if not mentioned_nums:
-        return ""
-
-    matched = []
-    for num in mentioned_nums:
-        # 末尾一致で検索（Article_2 が Article_20 にマッチしないよう正規表現を使用）
-        pattern = re.compile(rf"Article_{num}$")
-        for article in articles:
-            if hasattr(article, "unique_anchor") and pattern.search(article.unique_anchor):
-                matched.append((num, article))
-                break
-
-    if not matched:
-        return ""
-
-    lines = [
-        "【クエリで指定された条文の照合情報 - 回答前に必ず確認すること】",
-        "クエリに以下の条文番号が含まれています。この情報と照合した上で、前提が誤っている場合は冒頭で訂正してください。",
-        "",
-    ]
-    for num, article in matched:
-        summary = getattr(article, "article_summary", None) or ""
-        lines.append(f"■ 第{num}条の正式タイトル: {summary}")
-
-    lines += ["", "---", ""]
-
-    logger.info(f"Mentioned article prefix built for articles: {[m[0] for m in matched]}")
-    return "\n".join(lines)
+_URL_IN_QUERY_PATTERN = re.compile(r"https://\S+")
 
 
 _QUERY_LAW_NAME_PATTERN = re.compile(r"[一-龥ァ-ヴー]+(?:法律|法|規則|政令|条例|省令)")
@@ -342,14 +355,14 @@ def _build_substitution_warning(query_law_names: list[str], estimated_law_names:
     if not query_law_names or not estimated_law_names:
         return ""
 
-    _THRESHOLD = 0.30
+    threshold = 0.30
 
     substituted = []
     for qname in query_law_names:
         sims = {ename: _bigram_similarity(qname, ename) for ename in estimated_law_names}
         best_match = max(sims, key=sims.get)
         best_sim = sims[best_match]
-        if best_sim < _THRESHOLD:
+        if best_sim < threshold:
             substituted.append((qname, best_match))
             logger.info(
                 f"Query law name substitution detected: '{qname}' → '{best_match}' (sim={best_sim:.2f})"
@@ -379,10 +392,7 @@ def _expand_law_names_with_ordinances(law_names: list[str]) -> list[str]:
     """
     expanded = list(law_names)
     for name in law_names:
-        if name.endswith("法律"):
-            expanded.append(f"{name}施行令")
-            expanded.append(f"{name}施行規則")
-        elif name.endswith("法"):
+        if name.endswith("法律") or name.endswith("法"):
             expanded.append(f"{name}施行令")
             expanded.append(f"{name}施行規則")
     # 重複排除（順序保持）
@@ -426,14 +436,14 @@ def _check_law_name_divergence(law_names: list[str], articles: list) -> str:
     if not bq_law_titles:
         return ""
 
-    _THRESHOLD = 0.40
+    threshold = 0.40
 
     diverged = []
     for law_name in law_names:
         sims = {title: _bigram_similarity(law_name, title) for title in bq_law_titles}
         best_title = max(sims, key=sims.get)
         best_sim = sims[best_title]
-        if best_sim < _THRESHOLD:
+        if best_sim < threshold:
             diverged.append((law_name, best_title, best_sim))
             logger.warning(
                 f"Law name divergence detected: '{law_name}' → '{best_title}' (sim={best_sim:.2f})"
@@ -480,26 +490,27 @@ def _fetch_summary_only_full_content(articles: list, bq_retriever) -> list:
         return []
 
 
-def _fetch_mentioned_articles_full_content(query: str, articles: list, bq_retriever) -> list:
-    """クエリで言及された条文番号の全文を BQ から直接取得する（100k文字制限を迂回）"""
-    mentioned_nums = _ARTICLE_NUM_PATTERN.findall(query)
-    if not mentioned_nums:
+def _fetch_mentioned_articles_full_content_by_anchors(
+    resolved_anchors: set[str], articles: list, bq_retriever
+) -> list:
+    """resolved_anchors に対応する条文の全文を BQ から直接取得する。"""
+    if not resolved_anchors:
         return []
 
     law_nums = list({a.law_num for a in articles if a.law_num})
     if not law_nums:
         return []
 
-    unique_anchors = [f"Main_Article_{num}" for num in mentioned_nums]
+    unique_anchors = list(resolved_anchors)
 
     try:
         full_articles = bq_retriever.get_full_articles(law_nums, unique_anchors)
         logger.info(
-            f"Fetched {len(full_articles)} full articles for mentioned nums: {mentioned_nums}"
+            f"Fetched {len(full_articles)} full articles by anchors: {unique_anchors}"
         )
         return full_articles
     except Exception as e:
-        logger.error(f"Failed to fetch mentioned articles full content: {e}")
+        logger.error(f"Failed to fetch mentioned articles by anchors: {e}")
         return []
 
 
@@ -553,7 +564,7 @@ def _build_url_web_hits(urls: list[str]) -> list[dict]:
         try:
             after_scheme = url.split("://", 1)[-1]
             fallback_domain = after_scheme.split("/")[0]
-            final_url, title = gemini_helpers._fetch_page_info(url, fallback_domain)
+            final_url, title = gemini_helpers._fetch_page_info(url, fallback_domain, trusted=False)
             return {"title": title, "url": final_url, "snippet": ""}
         except Exception as e:
             logger.warning(f"URL hit fetch failed for {url}: {e}")
@@ -623,7 +634,9 @@ def generate_law_report(
     # クエリから元の法令名を抽出（web grounding 前の表記を保持）
     query_law_names = _extract_law_names_from_query(query)
 
-    law_names, raw_web_hits = _estimate_law_names(query, genai_client, app_config, usage_tracker)
+    law_names, raw_web_hits, ai_mentioned_articles = _estimate_law_names(
+        query, genai_client, app_config, usage_tracker
+    )
     if not law_names:
         return (
             "クエリから関連する法令を特定できませんでした。より具体的な法令名（例：民法、刑法、労働基準法など）を含めてクエリを再構成してください。",
@@ -662,20 +675,45 @@ def generate_law_report(
     # 推定法令名とBQ取得法令名の乖離チェック（架空法令の誤マッピング検出）
     law_name_divergence_warning = _check_law_name_divergence(law_names, articles)
 
+    # AI ベースの条文番号解決（Phase 2） - AI選択前に実行してanchor確保
+    if ai_mentioned_articles:
+        resolved_anchors, resolved_pairs = article_resolver.resolve_to_anchors(
+            ai_mentioned_articles, articles
+        )
+        mentioned_prefix = article_resolver.build_prefix_from_resolved(resolved_pairs, query)
+    else:
+        resolved_anchors = set()
+        resolved_pairs = []
+        mentioned_prefix = ""
+
     articles = _select_articles(query, articles, genai_client, app_config, usage_tracker)
 
-    # Approach A: クエリで言及された条文番号のプレフィックスを生成（_to_full_articles 前に実施）
-    mentioned_prefix = _build_mentioned_articles_prefix(query, articles)
+    # AI選択結果に、ユーザー指定条文が含まれていなければ追加する
+    if resolved_anchors:
+        selected_anchors = {a.unique_anchor for a in articles}
+        missing = [
+            article
+            for _, article in resolved_pairs
+            if article.unique_anchor not in selected_anchors
+        ]
+        if missing:
+            articles = missing + articles
+            logger.info(
+                f"Added {len(missing)} user-specified articles missing from AI selection"
+            )
 
     final_articles = _to_full_articles(articles)
     if not final_articles:
         return "該当する条文が見つかりませんでした。", []
 
     # 言及条文の全文を BQ から直接取得してマージ（100k文字制限を迂回）
-    mentioned_full = _fetch_mentioned_articles_full_content(query, articles, bq_retriever)
+    mentioned_full = _fetch_mentioned_articles_full_content_by_anchors(
+        resolved_anchors, articles, bq_retriever
+    )
+    mentioned_anchors: set[str] = resolved_anchors
     if mentioned_full:
         # 既存の same unique_anchor をサマリー版から全文版に差し替え、先頭に配置
-        mentioned_anchors = {a.unique_anchor for a in mentioned_full}
+        mentioned_anchors = mentioned_anchors | {a.unique_anchor for a in mentioned_full}
         final_articles = mentioned_full + [
             a for a in final_articles if a.unique_anchor not in mentioned_anchors
         ]
@@ -688,7 +726,9 @@ def generate_law_report(
         final_articles = [summary_map.get(a.unique_anchor, a) for a in final_articles]
         logger.info(f"Upgraded {len(summary_full)} summary-only articles to full content")
 
-    search_results, references_text = _build_references(final_articles, web_hits)
+    search_results, references_text = _build_references(
+        final_articles, web_hits, mentioned_anchors
+    )
 
     # 各種警告・照合情報を参考情報の先頭に埋め込む（優先度順）
     if mentioned_prefix:
