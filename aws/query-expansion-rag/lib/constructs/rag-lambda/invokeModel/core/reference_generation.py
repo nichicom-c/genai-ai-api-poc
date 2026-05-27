@@ -8,7 +8,10 @@ def generate_reference(kb_response: KBResponse) -> str:
     # references = '<details>\n<summary>リファレンス</summary>\n\n'
     references = ""
 
-    for i, citation in enumerate(kb_response.citations, 1):
+    MIN_CITATION_LEN = 10
+    filtered = [c for c in kb_response.citations if len(c.text.strip()) >= MIN_CITATION_LEN]
+
+    for i, citation in enumerate(filtered, 1):
         references += f"### 参考情報 {i}\n\n"
         references += f"#### 引用文: \n{citation.text}\n"
         references += "#### 引用ファイル: \n"
@@ -22,6 +25,8 @@ def generate_reference(kb_response: KBResponse) -> str:
                 seen_metadata.add(metadata_key)
                 if metadata.file_name and metadata.url:
                     meta_info.append(f"[{metadata.file_name}]({metadata.url})")
+                elif metadata.file_name:
+                    meta_info.append(metadata.file_name)
                 if metadata.page_number is not None:
                     meta_info.append(f"p.{metadata.page_number}")
 

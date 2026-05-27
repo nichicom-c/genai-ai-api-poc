@@ -49,6 +49,7 @@ export const stackInputSchema = z.object({
   // SwitchRole
   idcUserNames: z.array(z.string()),
   switchRoleName: z.string().default(''),
+  iamPrincipalArns: z.array(z.string()).default([]),
 
   // Bedrock regions allowed for model invocation (defaults to deploy region if not specified)
   bedrockRegions: z.array(z.string()).optional(),

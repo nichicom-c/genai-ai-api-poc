@@ -1,4 +1,4 @@
-import { Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
+import { Stack, StackProps, RemovalPolicy, CfnOutput } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as cdk from 'aws-cdk-lib';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
@@ -162,6 +162,7 @@ export class RagS3VectorsKbStack extends Stack {
         },
         type: 'S3',
       },
+      dataDeletionPolicy: 'RETAIN',
       knowledgeBaseId: knowledgeBase.ref,
       name: `${props.appName}-s3v-datasource`,
     });
@@ -172,6 +173,16 @@ export class RagS3VectorsKbStack extends Stack {
     // Set public outputs
     this.knowledgeBaseId = knowledgeBase.ref;
     this.dataSourceBucketName = dataSourceBucket.bucketName;
+
+    new CfnOutput(this, 'KnowledgeBaseId', {
+      value: knowledgeBase.ref,
+      description: 'Bedrock Knowledge Base ID',
+    });
+
+    new CfnOutput(this, 'DataSourceBucketName', {
+      value: dataSourceBucket.bucketName,
+      description: 'S3 bucket name for data source documents',
+    });
 
     // 11. Apply cdk-nag suppressions
     this.applyNagSuppressions(knowledgeBaseRole);
@@ -362,6 +373,7 @@ export class RagS3VectorsKbStack extends Stack {
           's3vectors:PutVectors',
           's3vectors:QueryVectors',
           's3vectors:GetVectors',
+          's3vectors:DeleteVectors',
         ],
       })
     );

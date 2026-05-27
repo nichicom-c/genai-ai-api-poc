@@ -9,6 +9,7 @@ from core.kb_retrieve_and_rating import invoke_retrives
 from core.query_expansion import expand_query
 from core.reference_generation import generate_reference
 from services.bedrock_usage_tracker import BedrockUsageTracker
+from services.kb_response_processor import KBResponse
 from utils.file_handler import FileValidationError, process_files, truncate_files_for_logging
 from utils.utils import handleException
 
@@ -57,9 +58,14 @@ def parse_input(event):
     truncated_inputs = truncate_files_for_logging(inputs)
     logger.debug(f"Inputs received: {truncated_inputs}")
 
-    # ユーザーの質問を取得
+    # modeを先に取得（バリデーションに使うため）
+    mode = inputs.get("mode", "qa")
+    if mode not in ("qa", "policy_assist", "summarize", "multi_summarize", "summarize_structured", "multi_summarize_final"):
+        mode = "qa"
+
+    # ユーザーの質問を取得（summarize系モードは空可）
     user_question = inputs.get("question", "")
-    if not user_question:
+    if not user_question and mode not in ("summarize", "multi_summarize", "summarize_structured"):
         raise ValueError("question is required")
     logger.debug(f"User question: {user_question}")
 
@@ -84,6 +90,22 @@ def parse_input(event):
     output_in_detail = inputs.get("output_in_detail", False)
     logger.debug(f"output_in_detail: {output_in_detail}")
 
+    logger.debug(f"mode: {mode}")
+
+    # file_nameの取得（summarizeモード時に使用）
+    file_name = inputs.get("file_name", "").strip()
+    if mode in ("summarize", "summarize_structured") and not file_name:
+        raise ValueError("file_name is required for summarize mode")
+    logger.debug(f"file_name: {file_name}")
+
+    # file_namesの取得（multi_summarizeモード時に使用）
+    file_names = inputs.get("file_names", [])
+    if mode == "multi_summarize":
+        if not isinstance(file_names, list) or len(file_names) < 2:
+            raise ValueError("file_names must be a list of at least 2 items for multi_summarize mode")
+        file_names = [f.strip() for f in file_names if isinstance(f, str) and f.strip()]
+    logger.debug(f"file_names: {file_names}")
+
     # アプリ設定からレスポンスフッターを取得
     response_footer = get_response_footer()
 
@@ -103,6 +125,12 @@ def parse_input(event):
     user_tag = user_tag.strip() if user_tag else ""
     logger.debug(f"User specified tag: {user_tag}")
 
+    # 要約文字数制限の取得
+    max_chars = inputs.get("max_chars", 0)
+    if not isinstance(max_chars, int) or max_chars < 0:
+        max_chars = 0
+    logger.debug(f"max_chars: {max_chars}")
+
     return (
         user_question,
         n_queries,
@@ -111,6 +139,10 @@ def parse_input(event):
         file_content_blocks,
         system_prompt_override,
         user_tag,
+        mode,
+        file_name,
+        file_names,
+        max_chars,
     )
 
 
@@ -127,6 +159,20 @@ def generate_metadata_filters(tag: str) -> dict | None:
 
     # 複数タグの場合（OR条件）
     return {"orAll": [{"equals": {"key": "tags", "value": t}} for t in tags]}
+
+
+def generate_file_name_filter(file_name: str) -> dict | None:
+    if not file_name:
+        return None
+    return {"equals": {"key": "file_name", "value": file_name}}
+
+
+def generate_multi_file_filter(file_names: list[str]) -> dict | None:
+    if not file_names:
+        return None
+    if len(file_names) == 1:
+        return {"equals": {"key": "file_name", "value": file_names[0]}}
+    return {"orAll": [{"equals": {"key": "file_name", "value": f}} for f in file_names]}
 
 
 def handler(event, context):
@@ -147,26 +193,50 @@ def handler(event, context):
             file_content_blocks,
             system_prompt_override,
             user_tag,
+            mode,
+            file_name,
+            file_names,
+            max_chars,
         ) = parse_input(event)
 
-        # メタデータフィルタの生成
-        metadata_filters = generate_metadata_filters(user_tag)
+        # メタデータフィルタの生成（summarize_structured / multi_summarize_finalはKB不使用のためNone）
+        if mode == "summarize":
+            metadata_filters = generate_file_name_filter(file_name)
+        elif mode == "multi_summarize":
+            metadata_filters = generate_multi_file_filter(file_names)
+        elif mode in ("summarize_structured", "multi_summarize_final"):
+            metadata_filters = None
+        else:
+            metadata_filters = generate_metadata_filters(user_tag)
         logger.debug(f"Generated metadata filters: {metadata_filters}")
 
         # 添付ファイルが存在する場合はログに記録
         if file_content_blocks:
             logger.info(f"Processing request with {len(file_content_blocks)} file attachments")
 
-        # クエリ拡張を実行（添付ファイルとusage_trackerを渡す）
-        queries = expand_query(user_question, n_queries, file_content_blocks, usage_tracker)
+        # summarize系モードはクエリ拡張をスキップして固定クエリを使用
+        # summarize_structured / multi_summarize_finalはKB不要のためスキップ
+        if mode == "summarize":
+            queries = ["相談記録 主訴 状況 対応 計画"]
+            logger.info(f"Summarize mode: using fixed query for file={file_name}")
+        elif mode == "multi_summarize":
+            queries = ["相談記録 主訴 状況 対応 計画"]
+            logger.info(f"Multi-summarize mode: using fixed query for files={file_names}")
+        else:
+            queries = []
+            if mode not in ("summarize_structured", "multi_summarize_final"):
+                queries = expand_query(user_question, n_queries, file_content_blocks, usage_tracker)
         logger.debug(f"Expanded Queries: {queries}")
 
-        # Knowledge Base からのretrieveとgenerateを実行し、LLMで評価する並列処理を実行
-        # 注: kb_retrieve_and_rating.pyは現在、添付ファイルをサポートしていません
-        # Knowledge Baseの検索に添付ファイルを統合する場合は、将来的に拡張が必要です
-        logger.info("Knowledge base retrieve and relevance rating started")
-        kb_responses_and_ratings = invoke_retrives(user_question, queries, usage_tracker, metadata_filters)
-        logger.debug(f"kb_responses_and_ratings: {kb_responses_and_ratings}")
+        # summarize_structured / multi_summarize_finalはKBを使用せず空のレスポンスを使用
+        if mode in ("summarize_structured", "multi_summarize_final"):
+            kb_responses_and_ratings = KBResponse()
+            logger.info(f"{mode}: skipping KB retrieval, using empty KBResponse")
+        else:
+            # Knowledge Base からのretrieveとgenerateを実行し、LLMで評価する並列処理を実行
+            logger.info("Knowledge base retrieve and relevance rating started")
+            kb_responses_and_ratings = invoke_retrives(user_question, queries, usage_tracker, metadata_filters)
+            logger.debug(f"kb_responses_and_ratings: {kb_responses_and_ratings}")
 
         # Knowledge Base から収集した関連情報をcontextして付与し回答を生成（添付ファイルとusage_trackerを渡す）
         logger.info("Answer generation started")
@@ -177,11 +247,17 @@ def handler(event, context):
             file_content_blocks,
             system_prompt_override,
             usage_tracker,
+            mode=mode,
+            max_chars=max_chars,
+            file_names=file_names if mode == "multi_summarize" else None,
         )
 
-        # 引用セクションを追加
-        reference_str = generate_reference(kb_responses_and_ratings)
-        answer = answer_str + "\n\n" + response_footer + "\n\n" + reference_str
+        # summarize系モードは参考情報・フッター不要
+        if mode in ("summarize", "summarize_structured", "multi_summarize", "multi_summarize_final"):
+            answer = answer_str
+        else:
+            reference_str = generate_reference(kb_responses_and_ratings)
+            answer = answer_str + "\n\n" + response_footer + "\n\n" + reference_str
         logger.debug(f"Generated answer: {answer}")
 
         # usageMetadataを取得

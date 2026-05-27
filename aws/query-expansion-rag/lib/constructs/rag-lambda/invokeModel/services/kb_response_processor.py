@@ -23,6 +23,7 @@ class Citation:
     text: str
     metadata: list[Metadata] = field(default_factory=list)
     relevance_rating: int = 0
+    span_start: int = 0
 
 
 @dataclass
@@ -35,8 +36,10 @@ def process_kb_response(response: dict) -> KBResponse:
 
     if CITATIONS in response:
         for citation in response[CITATIONS]:
-            text = citation.get("generatedResponsePart", {}).get("textResponsePart", {}).get("text", "")
-            citation_obj = Citation(text=text)
+            text_part = citation.get("generatedResponsePart", {}).get("textResponsePart", {})
+            text = text_part.get("text", "")
+            span_start = text_part.get("span", {}).get("start", 0)
+            citation_obj = Citation(text=text, span_start=span_start)
 
             if RETRIEVED_REFERENCES in citation:
                 for reference in citation[RETRIEVED_REFERENCES]:
@@ -52,6 +55,32 @@ def process_kb_response(response: dict) -> KBResponse:
             kb_response.citations.append(citation_obj)
 
     return kb_response
+
+
+def merge_kb_response_fragments(kb_response: KBResponse) -> KBResponse:
+    """同一R&G応答内の断片（span_start>0）を先頭citation（span_start=0）に結合する。
+
+    process_kb_response 直後に呼ぶことで、relevance_rating前に断片を統合できる。
+    各R&G呼び出しのcitationsはspan順に並んでいることが前提。
+    """
+    merged: list[Citation] = []
+    for citation in kb_response.citations:
+        if merged and citation.span_start > 0:
+            prev = merged[-1]
+            prev.text += citation.text
+            existing_keys = {(m.file_name, m.url, m.page_number) for m in prev.metadata}
+            for m in citation.metadata:
+                if (m.file_name, m.url, m.page_number) not in existing_keys:
+                    prev.metadata.append(m)
+                    existing_keys.add((m.file_name, m.url, m.page_number))
+        else:
+            merged.append(Citation(
+                text=citation.text,
+                metadata=list(citation.metadata),
+                relevance_rating=citation.relevance_rating,
+                span_start=citation.span_start,
+            ))
+    return KBResponse(citations=merged)
 
 
 def extract_texts_from_kb_response(kb_response: KBResponse) -> list[str]:

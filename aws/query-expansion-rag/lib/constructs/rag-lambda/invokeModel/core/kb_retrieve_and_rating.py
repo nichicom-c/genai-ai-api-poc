@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from aws_lambda_powertools import Logger
 from config.config_manager import ConfigManager
 from services.aws_clients import bedrock_agent_runtime, bedrock_runtime
-from services.kb_response_processor import KBResponse, extract_texts_from_kb_response, process_kb_response
+from services.kb_response_processor import KBResponse, extract_texts_from_kb_response, merge_kb_response_fragments, process_kb_response
 from utils.utils import convertToArray, handleException, replacePlaceholders
 
 if TYPE_CHECKING:
@@ -180,6 +180,14 @@ def retrieve_kb_and_rating(
         logger.debug(f"Retrieve and generation query:{query}  response: {response}")
 
         kb_response = process_kb_response(response)
+        kb_response = merge_kb_response_fragments(kb_response)
+        kb_response.citations = [
+            c for c in kb_response.citations
+            if not (c.span_start == 0 and all(m.file_name is None for m in c.metadata))
+        ]
+        if not kb_response.citations:
+            result_queue.put(None)
+            return
         kb_response_texts = extract_texts_from_kb_response(kb_response)
         kb_response_texts = [f"抜粋{i + 1}: {text}" for i, text in enumerate(kb_response_texts)]
 

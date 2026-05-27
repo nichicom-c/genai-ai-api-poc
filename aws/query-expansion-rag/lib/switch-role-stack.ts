@@ -13,6 +13,8 @@ interface SwitchRoleForBedrockFlowsDeveloperStackProps extends StackProps {
   readonly switchRoleName: string;
   /** Application name identifier */
   readonly appName: string;
+  /** IAM user/role ARNs to add as additional principals (for non-SSO use) */
+  readonly iamPrincipalArns?: string[];
 }
 
 /**
@@ -33,14 +35,26 @@ export class SwitchRoleForBedrockFlowsDeveloperStack extends Stack {
     const awsAccount = Stack.of(this).account;
     const awsRegion = Stack.of(this).region;
 
-    // Build assume role principal with SSO conditions
-    const assumeRolePrincipal = new iam.ArnPrincipal(
-      `arn:aws:iam::${awsAccount}:role/aws-reserved/sso.amazonaws.com/${awsRegion}/${props.switchRoleName}`
-    ).withConditions({
-      StringLike: {
-        'aws:userid': props.idcUserNames.map((user) => `*:${user}`),
-      },
-    });
+    // Build assume role principals
+    const principals: iam.IPrincipal[] = [];
+
+    if (props.switchRoleName) {
+      principals.push(
+        new iam.ArnPrincipal(
+          `arn:aws:iam::${awsAccount}:role/aws-reserved/sso.amazonaws.com/${awsRegion}/${props.switchRoleName}`
+        ).withConditions({
+          StringLike: {
+            'aws:userid': props.idcUserNames.map((user) => `*:${user}`),
+          },
+        })
+      );
+    }
+
+    for (const arn of props.iamPrincipalArns ?? []) {
+      principals.push(new iam.ArnPrincipal(arn));
+    }
+
+    const assumeRolePrincipal = new iam.CompositePrincipal(...principals);
 
     // Define Bedrock permissions policy
     const bedrockPolicy = this.createBedrockPolicy(awsRegion);

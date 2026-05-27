@@ -24,6 +24,8 @@ excel_file = args.excel
 
 # Read the Excel file and get the shared link URLs
 df_shared_link_urls = pd.read_excel(excel_file)
+print(f"Excel columns: {df_shared_link_urls.columns.tolist()}")
+print(f"Excel rows: {len(df_shared_link_urls)}")
 
 # Loop through all files in the tar_dir directory
 for root, _dirs, files in os.walk(tar_dir):
@@ -39,7 +41,14 @@ for root, _dirs, files in os.walk(tar_dir):
             # Create the JSON file name
             json_file = f"{pdf_file}.metadata.json"
             # Get the shared link URL from the Excel file
-            shared_link_url = df_shared_link_urls[df_shared_link_urls["ファイル名"] == filename]["URL"].iloc[0]
+            matched = df_shared_link_urls[df_shared_link_urls["ファイル名"] == filename]["URL"]
+            if matched.empty:
+                print(f"SKIP: '{filename}' not found in Excel. Check column name and filename spelling.")
+                continue
+            shared_link_url = matched.iloc[0]
+            if pd.isna(shared_link_url):
+                print(f"SKIP: '{filename}' has no URL in Excel. Fill in the URL column.")
+                continue
             # Create the metadata attributes
             metadata_attributes = {"file_name": filename, "url": shared_link_url}
             # Validate metadata size for S3 Vectors backend

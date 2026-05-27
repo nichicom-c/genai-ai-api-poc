@@ -3,3 +3,7 @@
 .claude/
 !custom-resources/oss-index.js
 !test/unit/oss-index.test.js
+.venv/
+cdk.out/
+node_modules/
+__pycache__/

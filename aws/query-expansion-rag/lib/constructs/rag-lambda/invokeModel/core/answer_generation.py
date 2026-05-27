@@ -21,12 +21,28 @@ def generate_answer(
     file_content_blocks: list[dict[str, Any]] | None = None,
     system_prompt_override: str | None = None,
     usage_tracker: BedrockUsageTracker | None = None,
+    mode: str = "qa",
+    max_chars: int = 0,
+    file_names: list[str] | None = None,
 ) -> str:
     citations_texts = [citation.text for citation in kb_response.citations]
     logger.debug(f"Answer generation, citations texts: {citations_texts}")
 
     # 設定タイプを決定
-    config_type = "answer_generation_detail" if output_in_detail else "answer_generation"
+    if mode == "multi_summarize":
+        config_type = "multi_summarize"
+    elif mode == "summarize":
+        config_type = "summarize"
+    elif mode == "summarize_structured":
+        config_type = "summarize_structured"
+    elif mode == "multi_summarize_final":
+        config_type = "multi_summarize_aggregate"
+    elif mode == "policy_assist":
+        config_type = "policy_assist"
+    elif output_in_detail:
+        config_type = "answer_generation_detail"
+    else:
+        config_type = "answer_generation"
 
     # 設定マネージャーを初期化
     config = ConfigManager(config_type)
@@ -42,13 +58,21 @@ def generate_answer(
             system_prompt = "Please answer the question based on the provided context."
 
     # プロンプトにプレースホルダを適用
-    placeholder_replaced_prompt = replacePlaceholders(
-        system_prompt,
-        {
-            "question": user_question,
-            "context": "\n".join(citations_texts),
-        },
-    )
+    placeholders: dict[str, str] = {
+        "question": user_question,
+        "context": "\n".join(citations_texts),
+    }
+    if mode == "multi_summarize" and file_names:
+        placeholders["file_names"] = "\n".join(f"- {f}" for f in file_names)
+    if mode == "summarize_structured":
+        placeholders["max_chars"] = str(max_chars) if max_chars > 0 else "100"
+
+    placeholder_replaced_prompt = replacePlaceholders(system_prompt, placeholders)
+
+    # 文字数制限が指定されている場合はプロンプトに追記
+    if max_chars > 0 and mode in ("summarize", "multi_summarize"):
+        placeholder_replaced_prompt += f"\n\n出力は{max_chars}文字以内に収めてください。"
+        logger.debug(f"Appended max_chars constraint: {max_chars}")
 
     # モデルID取得
     model_id = config.get_model_id()

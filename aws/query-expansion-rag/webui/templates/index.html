@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG Chat — {{ app_name }}</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Helvetica Neue", Arial, sans-serif; background: #f5f5f5; color: #333; height: 100vh; display: flex; flex-direction: column; }
+
+    header {
+      background: #1a1a2e; color: #fff;
+      padding: 0 24px;
+      display: flex; align-items: center; gap: 16px;
+      flex-shrink: 0; height: 52px;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    header .app-name { font-size: 0.8rem; opacity: 0.6; flex: 1; }
+
+    nav { display: flex; gap: 0; }
+    nav button {
+      background: transparent; border: none; color: rgba(255,255,255,0.6);
+      padding: 0 20px; height: 52px; cursor: pointer;
+      font-size: 0.88rem; border-bottom: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav button:hover { color: #fff; }
+    nav button.active { color: #fff; border-bottom-color: #4a90e2; }
+
+    .view { display: none; flex: 1; overflow: hidden; }
+    .view.active { display: flex; }
+
+    /* ── Chat view ── */
+    #chat-view { flex-direction: column; }
+    #chat-container {
+      max-width: 800px; width: 100%; margin: 0 auto;
+      padding: 24px 16px 16px;
+      display: flex; flex-direction: column; gap: 0;
+      flex: 1; overflow: hidden;
+    }
+    #messages {
+      flex: 1; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 16px;
+      padding-bottom: 16px;
+    }
+    .message { display: flex; gap: 12px; }
+    .message.user { flex-direction: row-reverse; }
+    .bubble {
+      max-width: 75%; padding: 12px 16px;
+      border-radius: 18px; line-height: 1.6; font-size: 0.92rem;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .user .bubble { background: #1a1a2e; color: #fff; border-bottom-right-radius: 4px; }
+    .bot  .bubble { background: #fff; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; }
+    .bot .bubble h1,.bot .bubble h2,.bot .bubble h3 { margin: 8px 0 4px; }
+    .bot .bubble p  { margin: 4px 0; }
+    .bot .bubble ul,.bot .bubble ol { padding-left: 20px; margin: 4px 0; }
+    .bot .bubble li { margin: 2px 0; }
+    .bot .bubble code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; font-size: 0.88em; }
+    .bot .bubble pre { background: #f0f0f0; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
+    .bot .bubble pre code { background: none; padding: 0; }
+    .bot .bubble a { color: #1a1a2e; }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8rem; font-weight: bold; flex-shrink: 0;
+    }
+    .user .avatar { background: #4a90e2; color: #fff; }
+    .bot  .avatar { background: #e8f0fe; color: #1a1a2e; }
+    .thinking { opacity: 0.6; }
+    .dots::after {
+      content: '';
+      animation: dots 1.2s steps(3, end) infinite;
+    }
+    @keyframes dots {
+      0%   { content: ''; }
+      33%  { content: '.'; }
+      66%  { content: '..'; }
+      100% { content: '...'; }
+    }
+    #input-area {
+      background: #fff; border: 1px solid #ddd; border-radius: 16px;
+      padding: 12px 16px; display: flex; gap: 10px; align-items: flex-end;
+    }
+    #question {
+      flex: 1; border: none; outline: none; resize: none;
+      font-size: 0.95rem; line-height: 1.5; max-height: 120px;
+      font-family: inherit;
+    }
+    #options { display: flex; gap: 16px; align-items: center; flex-shrink: 0; }
+    #options label { font-size: 0.78rem; color: #666; display: flex; align-items: center; gap: 4px; }
+    #options select { font-size: 0.78rem; border: 1px solid #ccc; border-radius: 6px; padding: 2px 6px; }
+    #send-btn {
+      background: #1a1a2e; color: #fff; border: none;
+      border-radius: 10px; padding: 8px 16px;
+      font-size: 0.88rem; cursor: pointer; flex-shrink: 0;
+      transition: opacity 0.2s;
+    }
+    #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #send-btn:hover:not(:disabled) { opacity: 0.85; }
+
+    /* ── Records view ── */
+    #records-view { flex-direction: row; }
+
+    #records-sidebar {
+      width: 280px; flex-shrink: 0;
+      background: #fff; border-right: 1px solid #e0e0e0;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    #records-sidebar h2 {
+      padding: 16px;
+      font-size: 0.85rem; font-weight: 600;
+      color: #555; text-transform: uppercase; letter-spacing: 0.05em;
+      border-bottom: 1px solid #e0e0e0; flex-shrink: 0;
+    }
+    #records-list {
+      flex: 1; overflow-y: auto;
+      padding: 4px 0;
+    }
+    .case-group { border-bottom: 1px solid #f0f0f0; }
+    .case-group-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 16px; cursor: pointer;
+      background: #f8f9fa;
+      user-select: none;
+      transition: background 0.12s;
+    }
+    .case-group-header:hover { background: #f0f0f0; }
+    .case-group-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #1a1a2e; color: #fff;
+      border-radius: 4px; padding: 2px 7px;
+      font-size: 0.72rem; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .case-group-title {
+      font-size: 0.82rem; font-weight: 600; color: #333; flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .case-group-chevron {
+      font-size: 0.65rem; color: #999; flex-shrink: 0;
+      transition: transform 0.2s;
+    }
+    .case-group.collapsed .case-group-chevron { transform: rotate(-90deg); }
+    .case-group-items { }
+    .case-group.collapsed .case-group-items { display: none; }
+    .record-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 16px 8px 24px; cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background 0.12s;
+    }
+    .record-item:hover { background: #f5f5f5; }
+    .record-item.active {
+      background: #eef3fc; border-left-color: #4a90e2;
+    }
+    .record-item.checked { background: #fdf3e7; }
+    .record-checkbox {
+      flex-shrink: 0; margin-top: 4px;
+      width: 15px; height: 15px; cursor: pointer;
+      accent-color: #e65100;
+    }
+    .record-icon {
+      font-size: 1.2rem; flex-shrink: 0; margin-top: 2px;
+    }
+    .record-info { min-width: 0; flex: 1; }
+    .record-title {
+      font-size: 0.82rem; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      color: #222;
+    }
+    .record-sub {
+      font-size: 0.72rem; color: #888; margin-top: 2px;
+    }
+    #multi-footer {
+      padding: 10px 12px; border-top: 1px solid #e0e0e0;
+      background: #fff; flex-shrink: 0;
+      display: none; align-items: center; gap: 8px;
+    }
+    #multi-footer.visible { display: flex; }
+    #multi-count { font-size: 0.78rem; color: #666; flex: 1; }
+    #multi-summarize-btn {
+      background: #e65100; color: #fff; border: none;
+      border-radius: 8px; padding: 6px 12px;
+      font-size: 0.78rem; cursor: pointer; white-space: nowrap;
+      transition: opacity 0.15s;
+    }
+    #multi-summarize-btn:hover { opacity: 0.85; }
+    #multi-summarize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #multi-clear-btn {
+      background: transparent; border: 1px solid #ccc; color: #666;
+      border-radius: 8px; padding: 5px 10px;
+      font-size: 0.75rem; cursor: pointer;
+    }
+    #multi-clear-btn:hover { background: #f5f5f5; }
+
+    #multi-summary-view {
+      display: none; flex-direction: column; flex: 1; overflow: hidden;
+    }
+    #multi-summary-view.open { display: flex; }
+    #multi-summary-toolbar {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+      flex-shrink: 0;
+    }
+    #multi-summary-title { font-size: 0.88rem; font-weight: 600; flex: 1; color: #333; }
+    #multi-summary-close {
+      background: transparent; border: 1px solid #ccc; color: #555;
+      border-radius: 8px; padding: 5px 12px; font-size: 0.78rem; cursor: pointer;
+    }
+    #multi-summary-close:hover { background: #f5f5f5; }
+    #multi-summary-body {
+      flex: 1; overflow-y: auto; padding: 20px 24px;
+      background: #fff; font-size: 0.88rem; line-height: 1.75;
+    }
+    #multi-summary-body h1,#multi-summary-body h2,#multi-summary-body h3 { margin: 12px 0 6px; }
+    #multi-summary-body p { margin: 6px 0; }
+    #multi-summary-body ul,#multi-summary-body ol { padding-left: 20px; margin: 6px 0; }
+    #multi-summary-body hr { border: none; border-top: 1px solid #e0e0e0; margin: 12px 0; }
+    #multi-summary-loading { color: #888; }
+
+    /* ── Multi-summary structured content ── */
+    .ms-section { margin-bottom: 28px; }
+    .ms-section-title {
+      font-size: 0.83rem; font-weight: 700; color: #1a1a2e;
+      border-left: 3px solid #e65100; padding-left: 8px; margin-bottom: 12px;
+    }
+    .ms-table-wrap { overflow-x: auto; border-radius: 6px; border: 1px solid #e0e0e0; }
+    .ms-table {
+      width: 100%; border-collapse: collapse; font-size: 0.82rem;
+    }
+    .ms-table th {
+      background: #1a1a2e; color: #fff;
+      padding: 9px 12px; text-align: center;
+      font-weight: 600; white-space: nowrap;
+    }
+    .ms-table td {
+      padding: 9px 12px; border-bottom: 1px solid #eee;
+      vertical-align: top; line-height: 1.6;
+    }
+    .ms-table tr:last-child td { border-bottom: none; }
+    .ms-table tbody tr:hover td { background: #f8f9ff; }
+    .ms-td-center { text-align: center; white-space: nowrap; }
+    .ms-badge {
+      display: inline-block; padding: 2px 9px; border-radius: 12px;
+      font-size: 0.73rem; font-weight: 600; white-space: nowrap;
+    }
+    .ms-badge-ongoing  { background: #fff3e0; color: #e65100; }
+    .ms-badge-first    { background: #e8f0fe; color: #1565c0; }
+    .ms-badge-ended    { background: #e8f5e9; color: #1a6e3a; }
+    .ms-badge-default  { background: #f5f5f5; color: #666; }
+    .ms-summary-content { font-size: 0.85rem; line-height: 1.8; }
+    .ms-summary-content h1,.ms-summary-content h2,.ms-summary-content h3 { margin: 10px 0 5px; color: #1a1a2e; }
+    .ms-summary-content p { margin: 5px 0; }
+    .ms-summary-content ul,.ms-summary-content ol { padding-left: 20px; margin: 5px 0; }
+    .ms-summary-content strong { color: #1a1a2e; }
+    #ms-wordcloud-wrap {
+      background: linear-gradient(135deg, #f0f4ff 0%, #fafafa 100%);
+      border-radius: 12px; border: 1px solid #d8e4f0;
+      overflow: hidden; min-height: 360px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #ms-wordcloud-canvas { display: block; max-width: 100%; cursor: grab; }
+    #ms-wordcloud-canvas:active { cursor: grabbing; }
+    .ms-td-loading { color: #aaa; font-style: italic; text-align: center; padding: 10px; }
+    .ms-agg-loading { color: #888; padding: 16px 0; }
+
+    #pdf-panel {
+      flex: 1; display: flex; flex-direction: column;
+      background: #e8e8e8; overflow: hidden;
+    }
+    #pdf-toolbar {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+      flex-shrink: 0;
+    }
+    #pdf-title { font-size: 0.88rem; font-weight: 600; flex: 1; color: #333; }
+    #pdf-download {
+      background: #1a1a2e; color: #fff; border: none;
+      border-radius: 8px; padding: 6px 14px;
+      font-size: 0.78rem; cursor: pointer; text-decoration: none;
+      display: inline-block; transition: opacity 0.15s;
+    }
+    #pdf-download:hover { opacity: 0.8; }
+    #pdf-download.hidden { display: none; }
+    #summarize-btn {
+      background: #fff; color: #1a6e3a; border: 1.5px solid #1a6e3a;
+      border-radius: 8px; padding: 6px 14px;
+      font-size: 0.78rem; cursor: pointer; transition: background 0.15s;
+      display: none;
+    }
+    #summarize-btn:hover { background: #eaf5ee; }
+    #summarize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #summarize-chars {
+      font-size: 0.75rem; border: 1px solid #ccc; border-radius: 6px;
+      padding: 4px 6px; display: none; color: #555;
+    }
+    #policy-btn {
+      background: #fff; color: #e65100; border: 1.5px solid #e65100;
+      border-radius: 8px; padding: 6px 14px;
+      font-size: 0.78rem; cursor: pointer; transition: background 0.15s, color 0.15s;
+      display: none; white-space: nowrap;
+    }
+    #policy-btn:hover { background: #fff3e0; }
+    #policy-btn.active { background: #e65100; color: #fff; }
+    #policy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #summary-panel {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      padding: 0; max-height: 0; overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+      flex-shrink: 0;
+    }
+    #summary-panel.open {
+      max-height: 400px; padding: 16px;
+      overflow-y: auto;
+    }
+    #summary-loading { color: #888; font-size: 0.85rem; }
+    #summary-content { font-size: 0.85rem; line-height: 1.7; }
+    #summary-content h1,#summary-content h2,#summary-content h3 { margin: 8px 0 4px; font-size: 0.92rem; }
+    #summary-content p { margin: 4px 0; }
+    #summary-content ul,#summary-content ol { padding-left: 20px; margin: 4px 0; }
+    #summary-content strong { color: #1a1a2e; }
+
+    #policy-panel {
+      background: #fff8f5; border-bottom: 1px solid #f0c090;
+      padding: 0; max-height: 0; overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+      flex-shrink: 0;
+    }
+    #policy-panel.open {
+      max-height: 520px; padding: 14px 16px;
+      overflow-y: auto;
+    }
+    #policy-label {
+      font-size: 0.75rem; color: #a04000; font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #policy-loading { color: #a04000; font-size: 0.85rem; display: none; }
+    #policy-content { font-size: 0.85rem; line-height: 1.75; }
+    #policy-content h1,#policy-content h2,#policy-content h3 { margin: 8px 0 4px; font-size: 0.92rem; color: #a04000; }
+    #policy-content p { margin: 4px 0; }
+    #policy-content ul,#policy-content ol { padding-left: 20px; margin: 4px 0; }
+    #policy-content strong { color: #7a3000; }
+
+    #pdf-embed {
+      flex: 1; width: 100%; border: none;
+    }
+
+    #pdf-placeholder {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; color: #aaa;
+    }
+    #pdf-placeholder .icon { font-size: 3rem; }
+    #pdf-placeholder p { font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>RAG Chat</h1>
+    <span class="app-name">{{ app_name }}</span>
+    <nav>
+      <button class="active" onclick="switchTab('chat', this)">チャット</button>
+      <button onclick="switchTab('records', this)">相談記録</button>
+    </nav>
+  </header>
+
+  <!-- Chat view -->
+  <div id="chat-view" class="view active">
+    <div id="chat-container">
+      <div id="messages"></div>
+      <div id="input-area">
+        <textarea id="question" rows="1" placeholder="質問を入力してください..." oninput="autoResize(this)"></textarea>
+        <div id="options">
+          <label>
+            クエリ数
+            <select id="n-queries">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" id="detail"> 詳細
+          </label>
+        </div>
+        <button id="send-btn" onclick="sendQuestion()">送信</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Records view -->
+  <div id="records-view" class="view">
+    <div id="records-sidebar">
+      <h2>相談記録一覧</h2>
+      <div id="records-list">
+        <div style="padding:16px; color:#aaa; font-size:0.82rem;">読み込み中...</div>
+      </div>
+      <div id="multi-footer">
+        <span id="multi-count">0件選択</span>
+        <button id="multi-clear-btn" onclick="clearChecked()">解除</button>
+        <select id="multi-summarize-chars" style="font-size:0.75rem; border:1px solid #ccc; border-radius:6px; padding:3px 6px; color:#555;">
+          <option value="0">文字数制限なし</option>
+          <option value="400">400字以内</option>
+          <option value="800">800字以内</option>
+          <option value="1200">1200字以内</option>
+          <option value="1600">1600字以内</option>
+        </select>
+        <button id="multi-summarize-btn" onclick="multiSummarizeRecords()">まとめて要約</button>
+      </div>
+    </div>
+    <div id="pdf-panel">
+      <div id="pdf-toolbar">
+        <span id="pdf-title">ファイルを選択してください</span>
+        <select id="summarize-chars">
+          <option value="0">文字数制限なし</option>
+          <option value="200">200字以内</option>
+          <option value="400">400字以内</option>
+          <option value="600">600字以内</option>
+          <option value="800">800字以内</option>
+        </select>
+        <button id="summarize-btn" onclick="summarizeRecord()">AIで要約</button>
+        <button id="policy-btn" onclick="togglePolicyPanel()">対応方針支援</button>
+        <a id="pdf-download" class="hidden" href="#" download>ダウンロード</a>
+      </div>
+      <div id="summary-panel">
+        <div id="summary-loading" style="display:none;">要約を生成中<span class="dots"></span></div>
+        <div id="summary-content"></div>
+      </div>
+      <div id="policy-panel">
+        <div id="policy-label">対応方針支援 — 表示中の相談記録をもとに対応方針の案を提案します</div>
+        <div id="policy-loading">対応方針を生成中<span class="dots"></span></div>
+        <div id="policy-content"></div>
+      </div>
+      <div id="pdf-placeholder">
+        <div class="icon">📄</div>
+        <p>左のリストからファイルを選択してください</p>
+      </div>
+      <iframe id="pdf-embed" style="display:none;"></iframe>
+      <!-- 複数記録サマリー表示パネル -->
+      <div id="multi-summary-view">
+        <div id="multi-summary-toolbar">
+          <span id="multi-summary-title">複数相談記録 サマリー</span>
+          <button id="multi-summary-close" onclick="closeMultiSummary()">閉じる</button>
+        </div>
+        <div id="multi-summary-body">
+          <div id="multi-summary-loading" class="multi-summary-loading">サマリーを生成中<span class="dots"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Tab switching ──
+    function switchTab(tab, btn) {
+      document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      document.getElementById(tab + "-view").classList.add("active");
+      if (tab === "records") loadRecords();
+    }
+
+    // ── Records ──
+    const LABELS = {
+      "record_01_postpartum":           { title: "産後うつ・育児不安",              sub: "35歳・女性" },
+      "record_02_elderly_care":         { title: "高齢者認知症・介護サービス導入",    sub: "78歳・男性" },
+      "record_03_child_development":    { title: "子どもの言語発達遅れ",             sub: "３歳・男児" },
+      "record_04_diabetes":             { title: "糖尿病・生活習慣改善",             sub: "52歳・男性" },
+      "record_05_workplace_stress":     { title: "過重労働・メンタル不調",           sub: "28歳・女性" },
+      "record_06_pregnancy":            { title: "未婚妊娠・経済的不安",             sub: "24歳・女性" },
+      "record_07_domestic_violence":    { title: "DV被害・緊急避難",                sub: "41歳・女性" },
+      "record_08_alcohol":              { title: "アルコール依存疑い",               sub: "47歳・男性（家族来所）" },
+      "record_09_dementia":             { title: "認知症介護・介護者バーンアウト",    sub: "82歳・女性（家族来所）" },
+      "record_10_child_abuse_prevention": { title: "虐待リスク・養育支援",           sub: "２歳・男児" },
+    };
+
+    let recordsLoaded = false;
+
+    function getCaseNum(filename) {
+      const m = filename.replace(".pdf", "").match(/(\d+)/);
+      return m ? m[1].padStart(2, "0") : "00";
+    }
+
+    async function loadRecords() {
+      if (recordsLoaded) return;
+      const listEl = document.getElementById("records-list");
+      try {
+        const res = await fetch("/api/records");
+        const files = await res.json();
+        listEl.innerHTML = "";
+        if (files.length === 0) {
+          listEl.innerHTML = '<div style="padding:16px;color:#aaa;font-size:0.82rem;">ファイルがありません</div>';
+          return;
+        }
+
+        // Group files by case number
+        const groups = new Map();
+        files.forEach(filename => {
+          const num = getCaseNum(filename);
+          if (!groups.has(num)) groups.set(num, []);
+          groups.get(num).push(filename);
+        });
+
+        groups.forEach((groupFiles, caseNum) => {
+          const groupEl = document.createElement("div");
+          groupEl.className = "case-group";
+          groupEl.dataset.case = caseNum;
+
+          // Use the first file's label as the group title
+          const firstKey = groupFiles[0].replace(".pdf", "");
+          const groupLabel = LABELS[firstKey] || { title: `ケース ${caseNum}`, sub: "" };
+
+          const headerEl = document.createElement("div");
+          headerEl.className = "case-group-header";
+          headerEl.innerHTML = `
+            <span class="case-group-badge">CASE ${caseNum}</span>
+            <span class="case-group-title">${groupLabel.title}</span>
+            <span class="case-group-chevron">▼</span>`;
+          headerEl.addEventListener("click", () => {
+            groupEl.classList.toggle("collapsed");
+          });
+
+          const itemsEl = document.createElement("div");
+          itemsEl.className = "case-group-items";
+
+          groupFiles.forEach(filename => {
+            const key = filename.replace(".pdf", "");
+            const label = LABELS[key] || { title: filename, sub: "" };
+
+            const item = document.createElement("div");
+            item.className = "record-item";
+            item.dataset.filename = filename;
+            item.innerHTML = `
+              <input type="checkbox" class="record-checkbox" data-filename="${filename}" onclick="onCheckboxClick(event, '${filename}')">
+              <div class="record-icon">📋</div>
+              <div class="record-info">
+                <div class="record-title">${label.title}</div>
+                <div class="record-sub">${label.sub}</div>
+              </div>`;
+            item.addEventListener("click", (e) => {
+              if (e.target.classList.contains("record-checkbox")) return;
+              openPdf(filename, item);
+            });
+            itemsEl.appendChild(item);
+          });
+
+          groupEl.appendChild(headerEl);
+          groupEl.appendChild(itemsEl);
+          listEl.appendChild(groupEl);
+        });
+
+        recordsLoaded = true;
+      } catch (e) {
+        listEl.innerHTML = `<div style="padding:16px;color:#c00;font-size:0.82rem;">読み込み失敗: ${e.message}</div>`;
+      }
+    }
+
+    let currentFilename = "";
+    const checkedFiles = new Set();
+
+    function onCheckboxClick(e, filename) {
+      e.stopPropagation();
+      const item = e.target.closest(".record-item");
+      if (e.target.checked) {
+        checkedFiles.add(filename);
+        item.classList.add("checked");
+      } else {
+        checkedFiles.delete(filename);
+        item.classList.remove("checked");
+      }
+      updateMultiFooter();
+    }
+
+    function updateMultiFooter() {
+      const footer = document.getElementById("multi-footer");
+      const count = document.getElementById("multi-count");
+      const n = checkedFiles.size;
+      if (n >= 2) {
+        footer.classList.add("visible");
+        count.textContent = `${n}件選択中`;
+      } else if (n === 1) {
+        footer.classList.add("visible");
+        count.textContent = `1件選択中（あと1件以上選択してください）`;
+      } else {
+        footer.classList.remove("visible");
+      }
+    }
+
+    function clearChecked() {
+      checkedFiles.clear();
+      document.querySelectorAll(".record-checkbox").forEach(cb => { cb.checked = false; });
+      document.querySelectorAll(".record-item").forEach(el => el.classList.remove("checked"));
+      updateMultiFooter();
+    }
+
+    // ── まとめて要約（多段API呼び出し） ──
+
+    async function multiSummarizeRecords() {
+      if (checkedFiles.size < 2) return;
+      const fileList = Array.from(checkedFiles);
+
+      const btn  = document.getElementById("multi-summarize-btn");
+      const view = document.getElementById("multi-summary-view");
+      const body = document.getElementById("multi-summary-body");
+      const title = document.getElementById("multi-summary-title");
+
+      btn.disabled = true;
+      title.textContent = `複数相談記録 サマリー（${fileList.length}件）`;
+
+      document.getElementById("pdf-placeholder").style.display = "none";
+      document.getElementById("pdf-embed").style.display = "none";
+      document.getElementById("summary-panel").classList.remove("open");
+      view.classList.add("open");
+
+      // Step 1: テーブルの骨格を描画（全行ローディング状態）
+      body.innerHTML = buildTableSkeleton(fileList);
+
+      // Step 2: ファイルごとに並列でAPI呼び出し
+      const maxChars = parseInt(document.getElementById("multi-summarize-chars").value) || 0;
+      const tableData = new Array(fileList.length).fill(null);
+
+      const perFilePromises = fileList.map((fileName, i) =>
+        fetchPerFileSummary(fileName, maxChars)
+          .then(row => {
+            tableData[i] = row;
+            updateTableRow(i, row, false);
+          })
+          .catch(err => {
+            tableData[i] = { _error: true, _msg: err.message };
+            updateTableRow(i, tableData[i], true);
+          })
+      );
+
+      await Promise.all(perFilePromises);
+
+      // Step 3: 有効な行があれば集計コール
+      const validRows = tableData.filter(r => r && !r._error);
+      const aggSection = document.getElementById("ms-agg-section");
+
+      if (validRows.length === 0) {
+        aggSection.innerHTML = '<p style="color:#c00;">有効なデータが取得できませんでした。</p>';
+        btn.disabled = false;
+        return;
+      }
+
+      aggSection.innerHTML = `<div class="ms-agg-loading">全体要約を生成中<span class="dots"></span></div>`;
+
+      try {
+        const aggText = await fetchAggregateSummary(formatSummariesText(fileList, tableData));
+        renderAggregateAndWordCloud(aggSection, aggText, validRows);
+      } catch (err) {
+        aggSection.innerHTML = `<span style="color:#c00;">集計エラー: ${escapeHtml(err.message)}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function buildTableSkeleton(fileList) {
+      let html = `<div class="ms-section">
+        <div class="ms-section-title">各ケースの概要</div>
+        <div class="ms-table-wrap">
+          <table class="ms-table">
+            <thead><tr>
+              <th>No.</th><th>実施日</th><th>相談方法</th><th>サマリ内容</th><th>支援時期</th>
+            </tr></thead>
+            <tbody>`;
+      fileList.forEach((_, i) => {
+        html += `<tr id="ms-row-${i}">
+          <td class="ms-td-center">${i + 1}</td>
+          <td colspan="4" class="ms-td-loading">取得中<span class="dots"></span></td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></div>
+      <div id="ms-agg-section"></div>`;
+      return html;
+    }
+
+    function updateTableRow(index, data, isError) {
+      const row = document.getElementById(`ms-row-${index}`);
+      if (!row) return;
+      if (isError) {
+        row.innerHTML = `<td class="ms-td-center">${index + 1}</td>
+          <td colspan="4" style="color:#c00;text-align:center;">取得失敗: ${escapeHtml(data._msg || '')}</td>`;
+        return;
+      }
+      const bc = getSupportBadgeClass(data['支援時期']);
+      row.innerHTML = `
+        <td class="ms-td-center">${index + 1}</td>
+        <td class="ms-td-center">${escapeHtml(data['実施日'] || '不明')}</td>
+        <td class="ms-td-center">${escapeHtml(data['相談方法'] || '不明')}</td>
+        <td>${escapeHtml(data['サマリ内容'] || '')}</td>
+        <td class="ms-td-center"><span class="ms-badge ${bc}">${escapeHtml(data['支援時期'] || '不明')}</span></td>`;
+    }
+
+    async function fetchPerFileSummary(fileName, maxChars) {
+      const body = {
+        question: "",
+        mode: "summarize_structured",
+        file_name: fileName,
+        n_queries: 1,
+        output_in_detail: false,
+      };
+      if (maxChars > 0) body.max_chars = maxChars;
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      const m = data.answer.match(/```json\s*([\s\S]*?)```/);
+      if (m) {
+        const parsed = JSON.parse(m[1]);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0];
+      }
+      throw new Error("構造化データの抽出に失敗しました");
+    }
+
+    function formatSummariesText(fileList, tableData) {
+      return tableData.map((d, i) => {
+        if (!d || d._error) return `ケース${i + 1}（${fileList[i]}）: データ取得失敗`;
+        return `ケース${i + 1}（${fileList[i]}）:\n` +
+          `  実施日: ${d['実施日'] || '不明'}\n` +
+          `  相談方法: ${d['相談方法'] || '不明'}\n` +
+          `  サマリ内容: ${d['サマリ内容'] || '不明'}\n` +
+          `  支援時期: ${d['支援時期'] || '不明'}`;
+      }).join('\n\n');
+    }
+
+    async function fetchAggregateSummary(summaryText) {
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: summaryText,
+          mode: "multi_summarize_final",
+          n_queries: 1,
+          output_in_detail: false,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data.answer;
+    }
+
+    function renderAggregateAndWordCloud(container, aggText, validRows) {
+      let keywords = null;
+      let summaryText = aggText;
+
+      const jsonMatch = aggText.match(/^[\s\S]*?```json\s*(\[[\s\S]*?\])\s*```\s*([\s\S]*)$/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].text) {
+            keywords = parsed;
+            summaryText = jsonMatch[2].trim();
+          }
+        } catch (e) {}
+      }
+
+      container.innerHTML = `
+        <div class="ms-section">
+          <div class="ms-section-title">全体要約</div>
+          <div class="ms-summary-content">${marked.parse(summaryText)}</div>
+        </div>
+        <div class="ms-section">
+          <div class="ms-section-title">キーワードクラウド</div>
+          <div id="ms-wordcloud-wrap">
+            <canvas id="ms-wordcloud-canvas"></canvas>
+          </div>
+        </div>`;
+      setTimeout(() => drawSphereCloud(keywords, validRows), 150);
+    }
+
+    function getSupportBadgeClass(period) {
+      if (!period) return 'ms-badge-default';
+      if (period.includes('継続')) return 'ms-badge-ongoing';
+      if (period.includes('初回')) return 'ms-badge-first';
+      if (period.includes('終結')) return 'ms-badge-ended';
+      return 'ms-badge-default';
+    }
+
+    // ── 球体ワードクラウド（外部ライブラリ不要） ──
+    class SphereWordCloud {
+      constructor(canvas, words) {
+        this.canvas = canvas;
+        this.ctx    = canvas.getContext('2d');
+        this.rotX   = 0.3;
+        this.rotY   = 0;
+        this.vX     = 0.0020;
+        this.vY     = 0.0035;
+        this.drag   = false;
+        this.last   = null;
+        this.raf    = null;
+
+        // フィボナッチ球面分布で単語を配置
+        const n = words.length;
+        this.pts = words.map((w, i) => {
+          const phi   = Math.acos(1 - 2 * (i + 0.5) / n);
+          const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+          return { ox: Math.sin(phi)*Math.cos(theta),
+                   oy: Math.sin(phi)*Math.sin(theta),
+                   oz: Math.cos(phi), ...w };
+        });
+
+        this._bind();
+        this._loop();
+      }
+
+      _project(ox, oy, oz) {
+        const cx = Math.cos(this.rotX), sx = Math.sin(this.rotX);
+        const y1 = oy*cx - oz*sx,  z1 = oy*sx + oz*cx;
+        const cy = Math.cos(this.rotY), sy = Math.sin(this.rotY);
+        return { x: ox*cy + z1*sy, y: y1, z: -ox*sy + z1*cy };
+      }
+
+      _draw() {
+        const { canvas, ctx } = this;
+        const W = canvas.width, H = canvas.height;
+        const cx = W/2, cy = H/2, r = Math.min(W,H)*0.40;
+        ctx.clearRect(0, 0, W, H);
+
+        const pts = this.pts
+          .map(p => ({ ...p, ...(this._project(p.ox, p.oy, p.oz)) }))
+          .sort((a, b) => a.z - b.z);   // 奥から手前へ描画
+
+        pts.forEach(p => {
+          const d  = (p.z + 1) / 2;           // 0(奥) ~ 1(手前)
+          const fs = Math.round(p.size * (0.3 + 0.7*d));
+          ctx.save();
+          ctx.globalAlpha = 0.2 + 0.8*d;
+          ctx.font = `600 ${fs}px "Helvetica Neue",Arial,sans-serif`;
+          ctx.fillStyle    = p.color;
+          ctx.textAlign    = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(p.text, cx + p.x*r, cy + p.y*r);
+          ctx.restore();
+        });
+      }
+
+      _loop() {
+        if (!this.drag) { this.rotX += this.vX; this.rotY += this.vY; }
+        this._draw();
+        this.raf = requestAnimationFrame(() => this._loop());
+      }
+
+      _bind() {
+        const c = this.canvas;
+        const dn = e => {
+          this.drag = true;
+          const t = e.touches ? e.touches[0] : e;
+          this.last = { x: t.clientX, y: t.clientY };
+        };
+        const mv = e => {
+          if (!this.drag) return;
+          const t = e.touches ? e.touches[0] : e;
+          this.rotY += (t.clientX - this.last.x) * 0.008;
+          this.rotX += (t.clientY - this.last.y) * 0.008;
+          this.last = { x: t.clientX, y: t.clientY };
+        };
+        const up = () => { this.drag = false; };
+        c.addEventListener('mousedown',  dn);
+        c.addEventListener('touchstart', dn, { passive: true });
+        window.addEventListener('mousemove',  mv);
+        window.addEventListener('touchmove',  mv, { passive: true });
+        window.addEventListener('mouseup',    up);
+        window.addEventListener('touchend',   up);
+        this._off = () => {
+          c.removeEventListener('mousedown',  dn);
+          c.removeEventListener('touchstart', dn);
+          window.removeEventListener('mousemove',  mv);
+          window.removeEventListener('touchmove',  mv);
+          window.removeEventListener('mouseup',    up);
+          window.removeEventListener('touchend',   up);
+        };
+      }
+
+      destroy() {
+        if (this.raf) cancelAnimationFrame(this.raf);
+        if (this._off) this._off();
+      }
+    }
+
+    function drawSphereCloud(keywords, tableData) {
+      const canvas = document.getElementById('ms-wordcloud-canvas');
+      if (!canvas) return;
+
+      let wordList;
+      const palette = ['#1a1a2e','#4a90e2','#e65100','#1a6e3a','#7b1fa2','#c62828','#00695c','#0277bd'];
+
+      if (keywords && keywords.length > 0) {
+        const maxW = Math.max(...keywords.map(k => k.weight || 1));
+        wordList = keywords.map(({ text, weight }, i) => ({
+          text,
+          size: Math.max(11, Math.min(36, Math.round((weight || 1) / maxW * 24 + 12))),
+          color: palette[i % palette.length],
+        }));
+      } else {
+        const stopWords = new Set([
+          'は','が','を','に','で','の','と','も','や','か','な','だ','て','た',
+          'から','まで','ある','いる','する','なる','れる','られ','いう','こと',
+          'もの','ため','という','として','により','による','された','され',
+          'その','この','それ','など','より','ない','なく','なり','あり',
+          'ケース','記録','相談','保健師','対応','不明','について','詳細','サマリ','全体','要約'
+        ]);
+        const allText = (tableData || []).map(r => r['サマリ内容'] || '').join(' ');
+        const wordCounts = {};
+        (allText.match(/[一-鿿぀-ゟ゠-ヿ]{2,}/g) || []).forEach(w => {
+          if (!stopWords.has(w)) wordCounts[w] = (wordCounts[w] || 0) + 1;
+        });
+        const entries = Object.entries(wordCounts).sort((a, b) => b[1] - a[1]).slice(0, 50);
+        if (entries.length === 0) return;
+        wordList = entries.map(([text, cnt], i) => ({
+          text,
+          size: Math.max(11, Math.min(36, cnt * 6 + 12)),
+          color: palette[i % palette.length],
+        }));
+      }
+
+      const wrap = document.getElementById('ms-wordcloud-wrap');
+      canvas.width  = wrap.clientWidth || 600;
+      canvas.height = Math.round((wrap.clientWidth || 600) * 0.62);
+
+      if (window._sphereCloud) { window._sphereCloud.destroy(); window._sphereCloud = null; }
+      window._sphereCloud = new SphereWordCloud(canvas, wordList);
+    }
+
+    function closeMultiSummary() {
+      if (window._sphereCloud) { window._sphereCloud.destroy(); window._sphereCloud = null; }
+      document.getElementById("multi-summary-view").classList.remove("open");
+      if (currentFilename) {
+        document.getElementById("pdf-embed").style.display = "block";
+      } else {
+        document.getElementById("pdf-placeholder").style.display = "flex";
+      }
+    }
+
+    function openPdf(filename, itemEl) {
+      document.querySelectorAll(".record-item").forEach(el => el.classList.remove("active"));
+      itemEl.classList.add("active");
+
+      currentFilename = filename;
+
+      const url = `/records/${filename}`;
+      const key = filename.replace(".pdf", "");
+      const label = LABELS[key] || { title: filename, sub: "" };
+      const caseNum = getCaseNum(filename);
+
+      document.getElementById("pdf-title").textContent = `CASE ${caseNum}: ${label.title}（${label.sub}）`;
+
+      const dlBtn = document.getElementById("pdf-download");
+      dlBtn.href = url;
+      dlBtn.download = filename;
+      dlBtn.classList.remove("hidden");
+
+      document.getElementById("summarize-chars").style.display = "inline-block";
+      document.getElementById("summarize-btn").style.display = "inline-block";
+      document.getElementById("policy-btn").style.display = "inline-block";
+
+      // サマリーパネルをリセット
+      const panel = document.getElementById("summary-panel");
+      panel.classList.remove("open");
+      document.getElementById("summary-content").innerHTML = "";
+      document.getElementById("summary-loading").style.display = "none";
+
+      // 対応方針パネルをリセット
+      closePolicyPanel();
+
+      document.getElementById("pdf-placeholder").style.display = "none";
+      const embed = document.getElementById("pdf-embed");
+      embed.style.display = "block";
+      embed.src = url;
+    }
+
+    async function summarizeRecord() {
+      if (!currentFilename) return;
+
+      const btn = document.getElementById("summarize-btn");
+      const panel = document.getElementById("summary-panel");
+      const loadingEl = document.getElementById("summary-loading");
+      const contentEl = document.getElementById("summary-content");
+
+      btn.disabled = true;
+      contentEl.innerHTML = "";
+      loadingEl.style.display = "block";
+      panel.classList.add("open");
+
+      try {
+        const maxChars = parseInt(document.getElementById("summarize-chars").value) || 0;
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: "",
+            mode: "summarize",
+            file_name: currentFilename,
+            n_queries: 1,
+            output_in_detail: false,
+            max_chars: maxChars,
+          }),
+        });
+        const data = await res.json();
+        loadingEl.style.display = "none";
+
+        if (data.error) {
+          contentEl.innerHTML = `<span style="color:#c00;">エラー: ${escapeHtml(data.error)}</span>`;
+        } else {
+          contentEl.innerHTML = marked.parse(data.answer);
+        }
+      } catch (e) {
+        loadingEl.style.display = "none";
+        contentEl.innerHTML = `<span style="color:#c00;">通信エラー: ${escapeHtml(e.message)}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // ── Policy assist (records view) ──
+    function togglePolicyPanel() {
+      const panel = document.getElementById("policy-panel");
+      const isOpen = panel.classList.contains("open");
+      if (isOpen) {
+        closePolicyPanel();
+      } else {
+        if (!currentFilename) return;
+        document.getElementById("summary-panel").classList.remove("open");
+        panel.classList.add("open");
+        document.getElementById("policy-btn").classList.add("active");
+        runPolicyAssist();
+      }
+    }
+
+    function closePolicyPanel() {
+      document.getElementById("policy-panel").classList.remove("open");
+      document.getElementById("policy-btn").classList.remove("active");
+      document.getElementById("policy-content").innerHTML = "";
+      document.getElementById("policy-loading").style.display = "none";
+    }
+
+    async function runPolicyAssist() {
+      if (!currentFilename) return;
+
+      const policyBtn = document.getElementById("policy-btn");
+      const loadingEl = document.getElementById("policy-loading");
+      const contentEl = document.getElementById("policy-content");
+
+      policyBtn.disabled = true;
+      contentEl.innerHTML = "";
+      loadingEl.style.display = "block";
+
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "policy_assist",
+            file_name: currentFilename,
+            n_queries: 3,
+            output_in_detail: false,
+          }),
+        });
+        const data = await res.json();
+        loadingEl.style.display = "none";
+        if (data.error) {
+          contentEl.innerHTML = `<span style="color:#c00;">エラー: ${escapeHtml(data.error)}</span>`;
+        } else {
+          contentEl.innerHTML = marked.parse(data.answer);
+        }
+      } catch (e) {
+        loadingEl.style.display = "none";
+        contentEl.innerHTML = `<span style="color:#c00;">通信エラー: ${escapeHtml(e.message)}</span>`;
+      } finally {
+        policyBtn.disabled = false;
+      }
+    }
+
+    // ── Chat ──
+    const messagesEl = document.getElementById("messages");
+    const questionEl = document.getElementById("question");
+    const sendBtn = document.getElementById("send-btn");
+
+    questionEl.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); }
+    });
+
+function autoResize(el) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
+
+    function addMessage(role, text, cls = "") {
+      const div = document.createElement("div");
+      div.className = `message ${role}`;
+      const content = role === "bot" && !cls
+        ? marked.parse(text)
+        : escapeHtml(text);
+      div.innerHTML = `
+        <div class="avatar">${role === "user" ? "You" : "AI"}</div>
+        <div class="bubble ${cls}">${content}</div>`;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    async function typewriterMessage(text) {
+      const div = document.createElement("div");
+      div.className = "message bot";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      div.innerHTML = `<div class="avatar">AI</div>`;
+      div.appendChild(bubble);
+      messagesEl.appendChild(div);
+
+      const chunkSize = 8;
+      for (let i = 0; i < text.length; i += chunkSize) {
+        bubble.innerHTML = marked.parse(text.slice(0, i + chunkSize));
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        await new Promise(r => setTimeout(r, 12));
+      }
+      bubble.innerHTML = marked.parse(text);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function sendQuestion() {
+      const question = questionEl.value.trim();
+      if (!question) return;
+
+      addMessage("user", question);
+      questionEl.value = "";
+      questionEl.style.height = "auto";
+      sendBtn.disabled = true;
+
+      const thinkingEl = addMessage("bot", "回答を生成中", "thinking dots");
+
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question,
+            n_queries: parseInt(document.getElementById("n-queries").value),
+            output_in_detail: document.getElementById("detail").checked,
+            mode: "qa",
+          }),
+        });
+        const data = await res.json();
+        thinkingEl.remove();
+
+        if (data.error) {
+          addMessage("bot", "エラー: " + data.error);
+        } else {
+          await typewriterMessage(data.answer);
+        }
+      } catch (e) {
+        thinkingEl.remove();
+        addMessage("bot", "通信エラーが発生しました: " + e.message);
+      } finally {
+        sendBtn.disabled = false;
+        questionEl.focus();
+      }
+    }
+  </script>
+</body>
+</html>

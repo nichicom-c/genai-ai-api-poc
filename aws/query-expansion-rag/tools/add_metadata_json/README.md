@@ -22,7 +22,7 @@ Bedrock Knowledge Base の S3 データソースにドキュメントをアッ�
 **使用方法**:
 
 ```bash
-python py/01_write_filepath.py --dir /path/to/documents
+python py/01_write_filepath.py --dir records
 ```
 
 **引数**:
@@ -40,13 +40,13 @@ python py/01_write_filepath.py --dir /path/to/documents
 **使用方法**:
 
 ```bash
-python py/02_add_metadata_json.py --dir /path/to/documents --excel /path/to/url_mapping.xlsx
+python py/02_add_metadata_json.py --dir records --excel url_list.xlsx
 ```
 
 **使用方法（S3 Vectors バックエンドの場合）**:
 
 ```bash
-python py/02_add_metadata_json.py --dir /path/to/documents --excel /path/to/url_mapping.xlsx --s3vectors
+python py/02_add_metadata_json.py --dir records --excel url_list.xlsx --s3vectors
 ```
 
 **引数**:

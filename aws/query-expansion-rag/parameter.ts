@@ -20,12 +20,17 @@ const deploy_envs: Record<string, Partial<StackInput>> = {
     //   {"appName": "qerag", "appParamFile": "qerag.toml"}
     // ],
 
-    "qeRagAppNamesWithSharedCmek": [
-      {"appName": "qerag-shared-1", "appParamFile": "qerag.toml"}
+    "qeRagAppNamesWithS3Vectors": [
+      {"appName": "qerag-s3v", "appParamFile": "qerag.toml"}
     ],
     // 許可する送信元 IPv4 アドレス範囲を指定してください
     allowedIpV4AddressRanges: [
-      "0.0.0.0/0", // TODO: Replace with your actual source IP address ranges
+      "92.203.119.64/27",
+      "133.114.249.89/32",
+      "182.169.72.149/32",
+      "182.169.24.85/32",
+      "210.139.176.226/32",
+      "150.249.214.152/29"
     ],
 
     // SSO スイッチロールを使用する場合はロール名を指定してください（不要な場合は削除可）
@@ -35,6 +40,9 @@ const deploy_envs: Record<string, Partial<StackInput>> = {
     // bedrockRegions: ["ap-northeast-1", "ap-northeast-3"],
 
     // ログレベル（開発環境ではDEBUGログを出力）
+    switchRoleName: "",
+    iamPrincipalArns: ["arn:aws:iam::328513660901:user/n0268"],
+    apiLambdaIntegrationTimeout: 29,
     logLevel: "DEBUG",
   },
   // "-stg": {

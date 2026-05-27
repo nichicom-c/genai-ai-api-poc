@@ -19,8 +19,10 @@ const params = getParams(app);
 // アプリ名の重複チェック
 validateAppNames(params);
 
-if(!params.idcUserNames || params.idcUserNames.length === 0 || !params.switchRoleName || params.switchRoleName === ""){
-  throw new Error("idcUserNames and switchRoleName must be set in cdk.json");
+const hasSsoConfig = params.switchRoleName && params.switchRoleName !== "";
+const hasIamConfig = params.iamPrincipalArns && params.iamPrincipalArns.length > 0;
+if (!params.idcUserNames || params.idcUserNames.length === 0 || (!hasSsoConfig && !hasIamConfig)) {
+  throw new Error("idcUserNames and either switchRoleName or iamPrincipalArns must be set in cdk.json");
 }
 
 const env = {
@@ -45,7 +47,8 @@ for (const appCfg of params.qeRagAppNames) {
     env: env,
     idcUserNames: mergedParams.idcUserNames,
     switchRoleName: params.switchRoleName,
-    appName: mergedParams.appName
+    appName: mergedParams.appName,
+    iamPrincipalArns: params.iamPrincipalArns,
   });
   const kb = new RagKnowledgeBaseStack(app, `${mergedParams.appName}-qeRagKB`, {
     env: env,
@@ -125,7 +128,8 @@ for (const appCfg of params.qeRagAppNamesWithS3Vectors) {
     env: env,
     idcUserNames: mergedParams.idcUserNames,
     switchRoleName: params.switchRoleName,
-    appName: mergedParams.appName
+    appName: mergedParams.appName,
+    iamPrincipalArns: params.iamPrincipalArns,
   });
   const kb = new RagS3VectorsKbStack(app, `${mergedParams.appName}-qeRagKB`, {
     env: env,
