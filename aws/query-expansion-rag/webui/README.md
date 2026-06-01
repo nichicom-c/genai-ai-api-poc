@@ -17,13 +17,26 @@ Query Expansion RAG API をブラウザから利用するためのシンプル�
 
 ```bash
 cd webui
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## 起動
 
 ```bash
-AWS_PROFILE=hp-user APP_NAME="qerag-s3v" python app.py
+AWS_PROFILE=hp-user APP_NAME="qerag-s3v" .venv/bin/python app.py
+```
+
+バックグラウンドで起動する場合：
+
+```bash
+AWS_PROFILE=hp-user APP_NAME="qerag-s3v" nohup .venv/bin/python app.py &> /tmp/qerag-webui.log &
+```
+
+停止する場合：
+
+```bash
+kill $(lsof -ti :5000)
 ```
 
 ブラウザで `http://localhost:5000` を開いてください。
